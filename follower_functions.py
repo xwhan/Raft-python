@@ -1,6 +1,7 @@
 import socket
 import pickle
 import time
+import random
 
 from messages import *
 from KThread import *
@@ -10,7 +11,11 @@ def acceptor(server, data, addr):
 	_type = Msg.type
 
 	# deal with client's message
-	if _type == 'client':
+	if _type == 'client' or _type == 'redirect':
+
+		if _type == 'redirect':
+			addr = Msg.addr
+
 		msg_string = Msg.request_msg
 		if msg_string == 'show':
 			s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -20,14 +25,33 @@ def acceptor(server, data, addr):
 			ticket_num = int(msg_string.split()[1])
 			if server.role == 'leader':
 				print "I am the leader, customer wants to buy %d tickets" % ticket_num
+
+				# check whether this command has already been 
+				for idx, entry in enumerate(server.log):
+					if entry.uuid == Msg.uuid:
+						if server.commitIndex >= idx + 1:
+							s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+							s.sendto('Your request has been fullfilled', addr)
+							s.close()
+						else: # ignore
+							pass
+						return # ignore this new command
+
 				newEntry = LogEntry(server.currentTerm, ticket_num, addr, Msg.uuid)
 				s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 				s.sendto('The Leader has already got your request', addr)
 				s.close()
 				server.log.append(newEntry)
-
+			# we need to redirect the request to leader
 			else:
-				pass
+				if server.leaderID != 0:
+					redirect_target = server.leaderID
+				else:
+					redirect_target = random.choice(server.peers)
+				redirect_msg = RequestRedirect(msg_string, Msg.uuid, addr)
+				s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+				s.sendto(pickle.dumps(redirect_msg), ("",server.addressbook[redirect_target]))
+				s.close()
 		return
 
 	_sender = Msg.sender
@@ -74,6 +98,7 @@ def acceptor(server, data, addr):
 					if server.election.is_alive():
 						server.election.kill()
 				# becomes a leader
+					server.role = 'leader'
 					server.follower_state.kill()
 					server.leader_state = KThread(target = server.leader, args = ())
 					server.leader_state.start()

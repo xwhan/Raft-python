@@ -61,9 +61,10 @@ class Request(object):
         self.type = 'client'
         self.uuid = uuid
 
-class RequestRedirect(object):
+class RequestRedirect(Request):
     def __init__(self, request_msg, uuid, addr):
         self.request_msg = request_msg
         self.uuid = uuid
         self.addr = addr
+        self.type = 'redirect'
         

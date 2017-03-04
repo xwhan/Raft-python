@@ -46,3 +46,24 @@ class AppendEntriesResponseMsg(BaseMessage):
         self.success = success
         self.type = BaseMessage.AppendEntriesResponse
 
+class LogEntry(object):
+
+    def __init__(self, term, command, addr, uuid):
+        self.term = term
+        self.command = command
+        self.uuid = uuid
+        self.addr = addr
+
+class Request(object):
+    """docstring for Request"""
+    def __init__(self, request_msg, uuid = 0):
+        self.request_msg = request_msg
+        self.type = 'client'
+        self.uuid = uuid
+
+class RequestRedirect(object):
+    def __init__(self, request_msg, uuid, addr):
+        self.request_msg = request_msg
+        self.uuid = uuid
+        self.addr = addr
+        

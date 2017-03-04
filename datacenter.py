@@ -23,12 +23,13 @@ class Server(object):
 		self.commitIndex = 0
 		self.lastApplied = 0
 
-		self.a2c = {}
+		self.leaderID = 0
 
 		# need to put it into file later on
 		self.votedFor = -1
 		self.currentTerm = 0
 		self.log = []
+		self.poolsize = 100
 
 		self.addressbook = {1:50001, 2:50002, 3:50003}
 
@@ -47,18 +48,18 @@ class Server(object):
 		self.prevLogIndex = 0
 
 
-		self.listener = KThread(target = self.listen, args= (follower_acceptor,))
+		self.listener = KThread(target = self.listen, args= (acceptor,))
 		self.listener.start()
 
 
 
-	def listen(self, follower_accept):
+	def listen(self, on_accept):
 		srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 		srv.bind(("", self.port))
 		print 'start listenning'
 		while True:
 			data, addr = srv.recvfrom(1024)
-			thr = KThread(target=follower_accept, args=(self, data, addr))
+			thr = KThread(target=on_accept, args=(self, data, addr))
 			thr.start()
 		srv.close()
 

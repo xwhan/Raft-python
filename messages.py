@@ -6,24 +6,43 @@ class BaseMessage(object):
     AppendEntries = 0
     RequestVote = 1
     RequestVoteResponse = 2
-    Response = 3
+    AppendEntriesResponse = 3
 
-    def __init__(self, sender, receiver, term, data):
+    def __init__(self, sender, receiver, term):
         self.sender = sender
         self.receiver = receiver
-        self.data = data
         self.term = term
 
 
 class RequestVoteMsg(BaseMessage):
 
     def __init__(self, sender, receiver, term, data):
-        BaseMessage.__init__(self, sender, receiver, term, data)
+        BaseMessage.__init__(self, sender, receiver, term)
+        self.data = data
         self.type = BaseMessage.RequestVote
 
 
 class VoteResponseMsg(BaseMessage):
 
     def __init__(self, sender, receiver, term, data):
-        BaseMessage.__init__(self, sender, receiver, term, data)
+        BaseMessage.__init__(self, sender, receiver, term)
         self.type = BaseMessage.RequestVoteResponse
+        self.data = data
+
+class AppendEntriesMsg(BaseMessage):
+
+    def __init__(self, sender, receiver, term, entries, commitIndex, prevLogIndex, prevLogTerm):
+        BaseMessage.__init__(self, sender, receiver, term)
+        self.type = BaseMessage.AppendEntries
+        self.entries = entries
+        self.commitIndex = commitIndex
+        self.prevLogTerm = prevLogTerm
+        self.prevLogIndex = prevLogIndex
+
+class AppendEntriesResponseMsg(BaseMessage):
+
+    def __init__(self, sender, receiver, term, success):
+        BaseMessage.__init__(self, sender, receiver, term)
+        self.success = success
+        self.type = BaseMessage.AppendEntriesResponse
+

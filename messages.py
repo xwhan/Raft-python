@@ -41,10 +41,11 @@ class AppendEntriesMsg(BaseMessage):
 
 class AppendEntriesResponseMsg(BaseMessage):
 
-    def __init__(self, sender, receiver, term, success):
+    def __init__(self, sender, receiver, term, success, matchIndex):
         BaseMessage.__init__(self, sender, receiver, term)
         self.success = success
         self.type = BaseMessage.AppendEntriesResponse
+        self.matchIndex = matchIndex
 
 class LogEntry(object):
 
@@ -67,4 +68,12 @@ class RequestRedirect(Request):
         self.uuid = uuid
         self.addr = addr
         self.type = 'redirect'
+
+class ServerConfig(object):
+    def __init__(self, poolsize, currentTerm, votedFor, log):
+        self.poolsize = poolsize
+        self.currentTerm = currentTerm
+        self.votedFor = votedFor
+        self.log = log
+
         

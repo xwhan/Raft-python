@@ -2,7 +2,9 @@ import socket
 import json
 import pickle
 import uuid
+import time
 
+from KThread import *
 from messages import *
 
 class client(object):
@@ -17,12 +19,16 @@ class client(object):
         msg = Request(buy_msg, uuid)
         s.sendto(pickle.dumps(msg), ("", port))
         while 1:
-            reply, addr = s.recvfrom(1024)
-            if reply != '':
-                self.num_of_reply += 1
-                print(reply)
-            if self.num_of_reply == 2:
-                break
+            try:
+                reply, addr = s.recvfrom(1024)
+                if reply != '':
+                    self.num_of_reply += 1
+                    print(reply)
+                if self.num_of_reply == 2:
+                    break
+            except Exception as e:
+                print 'Connection refused'
+ 
         s.close()
 
     def show_state(self, port):
@@ -30,25 +36,42 @@ class client(object):
         msg = Request('show')
         s.sendto(pickle.dumps(msg),("",port))
         while 1:
-            reply, addr = s.recvfrom(1024)
-            if reply != '':
-                print 'Pool Size', reply
-                break
+            try:
+                reply, addr = s.recvfrom(1024)
+                if reply != '':
+                    print 'Pool Size', reply
+                    break
+            except Exception as e:
+                print 'Connection refused'
+
 
 def main():
-    with open('config.json', 'r') as f:
-        config = json.load(f)
-    ports = config['AddressBooks']
-    num_ports = len(ports)
+    try:
+        with open('config.json', 'r') as f:
+            config = json.load(f)
+        ports = config['AddressBook']
+        num_ports = len(ports)
+    except Exception as e:
+        raise e
+
     while True:
         customer = client()
         server_id = input('Which datacenter do you want to connect to? 1-%d: ' % num_ports )
         request = raw_input('How can we help you? --')
         if request == 'show':
-            customer.show_state(ports[server_id - 1])
+            requestThread = KThread(target = customer.show_state, args = (ports[server_id - 1],))
         else:
             uuid_ = uuid.uuid1()
-            customer.buyTickets(ports[server_id - 1], request, uuid_)
+            requestThread = KThread(target = customer.buyTickets, args =  (ports[server_id - 1], request, uuid_))
+        start_time = time.time()
+        requestThread.start()
+        timeout = 5
+        while time.time() - start_time < timeout:
+            if not requestThread.is_alive():
+                break
+        if requestThread.is_alive():
+            print 'Timeout! Try again'
+            requestThread.kill()
 
 if __name__ == '__main__':
     main()

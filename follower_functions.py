@@ -18,8 +18,19 @@ def acceptor(server, data, addr):
 
 		msg_string = Msg.request_msg
 		if msg_string == 'show':
+			state = server.poolsize
+			committed_log = ''
+			for idx in range(0,server.commitIndex):
+				entry = server.log[idx]
+				committed_log += str(entry.command) + ' '
+
+			all_log = ''
+			for entry in server.log:
+				all_log += str(entry.command) + ' '
+
+			show_msg = 'state machine: ' + str(state) + '\n' + 'committed log:' + committed_log + '\n' + 'all log:' + all_log
 			s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-			s.sendto(str(server.poolsize),addr)
+			s.sendto(show_msg, addr)
 			s.close()
 		else:
 			ticket_num = int(msg_string.split()[1])
@@ -39,11 +50,13 @@ def acceptor(server, data, addr):
 
 				newEntry = LogEntry(server.currentTerm, ticket_num, addr, Msg.uuid)
 				s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-				s.sendto('The Leader has already got your request', addr)
+				s.sendto('The Leader gets your request', addr)
 				s.close()
 				server.log.append(newEntry)
+				server.save()
 			# we need to redirect the request to leader
 			else:
+				print 'redirect the request to leader'
 				if server.leaderID != 0:
 					redirect_target = server.leaderID
 				else:
@@ -69,15 +82,20 @@ def acceptor(server, data, addr):
 		elif _term == server.currentTerm:
 			if log_info >= (server.lastLogTerm, server.lastLogIndex) and (server.votedFor == -1 or server.votedFor == _sender):
 				voteGranted = 1
+				server.votedFor = _sender
+				server.save()
 			else:
 				voteGranted = 0
 		else:
 			# find higher term in RequestVoteMsg
 			server.currentTerm = _term
+			server.save()
 			server.step_down()
 
 			if log_info >= (server.lastLogTerm, server.lastLogIndex):
 				voteGranted = 1
+				server.votedFor = _sender
+				server.save()
 			else:
 				voteGranted = 0
 		reply = str(voteGranted)
@@ -106,6 +124,7 @@ def acceptor(server, data, addr):
 		else:
 			if _term > server.currentTerm: # discover higher term
 				server.currentTerm = _term
+				server.save()
 				if server.role == 'candidate':
 					server.step_down()
 
@@ -118,59 +137,80 @@ def acceptor(server, data, addr):
 		prevLogTerm = Msg.prevLogTerm
 		prevLogIndex = Msg.prevLogIndex
 
+		matchIndex = server.commitIndex
+
 		# This is a valid new leader
 		if _term >= server.currentTerm:
 			server.currentTerm = _term
+			server.save()
 			server.step_down()
 			if server.role == 'follower':
 				server.last_update = time.time()
 			if prevLogIndex != 0:
 				if len(server.log) >= prevLogIndex:
-					if server.log[prevLogIndex].term == prevLogTerm:
+					if server.log[prevLogIndex - 1].term == prevLogTerm:
 						success = 'True'
 						server.leaderID = _sender
 						server.log = server.log[:prevLogIndex] + entries
+						if len(entries) != 0:
+							matchIndex = len(server.log)
+						server.save()
 					else:
 						success = 'False'
 				else:
 					success = 'False'
 			else:
 				success = 'True'
+				if len(entries) != 0:
+					server.log = server.log[:prevLogIndex] + entries
+					server.save()
+					matchIndex = len(server.log)
 				server.leaderID = _sender
 		else:
 			success = 'False'
 
 		if leaderCommit > server.commitIndex:
+			lastApplied = server.commitIndex
 			server.commitIndex = min(leaderCommit, len(server.log))
+			if server.commitIndex > lastApplied:
+				server.poolsize = server.initial_state
+				for idx in range(1, server.commitIndex + 1):
+					server.poolsize -= server.log[idx - 1].command
 
-		reply_msg = AppendEntriesResponseMsg(server.id, _sender, server.currentTerm, success)
+
+		reply_msg = AppendEntriesResponseMsg(server.id, _sender, server.currentTerm, success, matchIndex)
 		s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 		s.sendto(pickle.dumps(reply_msg), ("",server.addressbook[_sender]))
 
 	elif _type == 3: # AppendEntriesResponse:
 		#print '---------Get AppendEntries Response message---------'
 		success = Msg.success
+		matchIndex = Msg.matchIndex
+
 		if success == 'False':
 			if _term > server.currentTerm:
 				server.currentTerm = _term
+				server.save()
 				server.step_down()
 			else:
 				server.nextIndex[_sender] -= 1
 		else:
-			if server.nextIndex[_sender] <= len(server.log):
-				server.matchIndex[_sender] = server.nextIndex[_sender]
+			if server.nextIndex[_sender] <= len(server.log) and matchIndex > server.matchIndex[_sender]:
+				server.matchIndex[_sender] = matchIndex
 				server.nextIndex[_sender] += 1
 
-		if server.commitIndex < max(server.matchIndex.values()):
-			for N in range(server.commitIndex + 1,max(server.matchIndex.values()) + 1):
-				compare = [item >= N for item in server.matchIndex.values()]
-				if sum(compare) >= server.majority and server.log[N-1].term == server.currentTerm:
-					for idx in range(server.commitIndex + 1, N + 1):
-						server.poolsize -= server.log[idx-1].command
-						s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-						s.sendto('Your request is fullfilled',server.log[idx-1].addr)
-						s.close()
-					server.commitIndex = N
+			if server.commitIndex < max(server.matchIndex.values()):
+				start = server.commitIndex + 1
+				for N in range(start,max(server.matchIndex.values()) + 1):
+					compare = [item >= N for item in server.matchIndex.values()]
+					if sum(compare) + 1 == server.majority and server.log[N-1].term == server.currentTerm:
+						for idx in range(server.commitIndex + 1, N + 1):
+							server.poolsize -= server.log[idx-1].command
+							server.save()
+							s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+							s.sendto('Your request is fullfilled',server.log[idx-1].addr)
+							s.close()
+						server.commitIndex = N
 
 
 

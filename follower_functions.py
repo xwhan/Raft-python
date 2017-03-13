@@ -10,6 +10,60 @@ def acceptor(server, data, addr):
 	Msg = pickle.loads(data)
 	_type = Msg.type
 
+	# deal with config changes
+	if _type == 'change':
+		if Msg.phase == 1:
+			print 'Config change phase 1'
+			server.during_change = 1
+			server.new = Msg.new_config
+			server.old = server.peers[:]
+			server.old.append(server.id)
+			if Msg.addr != None:
+				addr = Msg.addr
+			newEntry = LogEntry(server.currentTerm, Msg, addr, Msg.uuid, 1)
+			server.log.append(newEntry)
+			server.peers = list(set(server.old + server.new))
+			server.peers.remove(server.id)
+			server.save()
+			print 'Config change phase 1 applied'
+			#return
+		else:
+			print 'Config change phase 2'
+			server.during_change = 2
+			server.new = Msg.new_config
+			if Msg.addr != None:
+				addr = Msg.addr
+			newEntry = LogEntry(server.currentTerm, Msg, addr, Msg.uuid, 2)
+			server.log.append(newEntry)
+			server.peers = server.new[:]
+			server.peers.remove(server.id)		
+			server.save()
+			print 'Config change phase 2 applied'
+			#return
+
+		# if server.role == 'leader':
+		# 	for peer in server.peers:
+		# 		if peer not in server.nextIndex:
+		# 			server.nextIndex[peer] = len(server.log) + 1 
+		# 			server.matchIndex[peer] = 0
+
+		if server.role != 'leader':
+			print 'redirect config change to the leader'
+			if server.leaderID != 0:
+				redirect_target = server.leaderID
+			else:
+				redirect_target = random.choice(server.peers)
+			if Msg.addr != None:
+				addr = Msg.addr
+			redirect_msg = ConfigChange(Msg.new_config, Msg.uuid, Msg.phase, addr)
+			s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+			s.sendto(pickle.dumps(redirect_msg), ("",server.addressbook[redirect_target]))
+			s.close()			
+
+		#server.log.append(newEntry)
+		#server.save()
+		return
+
 	# deal with client's message
 	if _type == 'client' or _type == 'redirect':
 
@@ -22,20 +76,38 @@ def acceptor(server, data, addr):
 			committed_log = ''
 			for idx in range(0,server.commitIndex):
 				entry = server.log[idx]
-				committed_log += str(entry.command) + ' '
+				if entry.type == 0:
+					committed_log += str(entry.command) + ' '
+				elif entry.type == 1:
+					committed_log += 'new_old' + ' '
+				else:
+					committed_log += 'new' + ' '
 
 			all_log = ''
 			for entry in server.log:
-				all_log += str(entry.command) + ' '
+				if entry.type == 0:
+					all_log += str(entry.command) + ' '
+				elif entry.type == 1:
+					all_log += 'new_old' + ' '
+				else:
+					all_log += 'new' + ' '
 
-			show_msg = 'state machine: ' + str(state) + '\n' + 'committed log:' + committed_log + '\n' + 'all log:' + all_log
+			show_msg = 'state machine: ' + str(state) + '\n' + 'committed log: ' + committed_log + '\n' + 'all log:' + all_log + '\n' + 'status: ' + str(server.during_change)
 			s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 			s.sendto(show_msg, addr)
 			s.close()
+
 		else:
 			ticket_num = int(msg_string.split()[1])
 			if server.role == 'leader':
 				print "I am the leader, customer wants to buy %d tickets" % ticket_num
+
+				if ticket_num > server.poolsize:
+					print 'Tickets not enough'
+					s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+					s.sendto('We do not have enough tickets', addr)
+					s.close()
+					return
 
 				# check whether this command has already been 
 				for idx, entry in enumerate(server.log):
@@ -108,18 +180,49 @@ def acceptor(server, data, addr):
 		print '---------Get vote response message---------'
 		voteGranted = int(_msg)
 		if voteGranted:
-			if server.role == 'candidate':
+			if server.during_change == 0:
+				if server.role == 'candidate':
+					server.request_votes.remove(_sender)
+					server.numVotes += 1
+					if server.numVotes == server.majority:
+						print 'Get majority votes, become leader at Term %d' % server.currentTerm
+						if server.election.is_alive():
+							server.election.kill()
+					# becomes a leader
+						server.role = 'leader'
+						server.follower_state.kill()
+						server.leader_state = KThread(target = server.leader, args = ())
+						server.leader_state.start()
+			elif server.during_change == 1:
 				server.request_votes.remove(_sender)
-				server.numVotes += 1
-				if server.numVotes >= server.majority:
-					print 'Get majority votes, become leader at Term %d' % server.currentTerm
+				if _sender in server.old:
+					server.oldVotes += 1 
+				if _sender in server.new:
+					server.newVotes += 1
+				majority_1 = len(server.old)/2 + 1
+				majority_2 = len(server.new)/2 + 1
+				if server.oldVotes >= majority_1 and server.newVotes >= majority_2:
+					print 'Get majority from both old and new, become leader at Term %d' % server.currentTerm
 					if server.election.is_alive():
 						server.election.kill()
-				# becomes a leader
 					server.role = 'leader'
 					server.follower_state.kill()
 					server.leader_state = KThread(target = server.leader, args = ())
 					server.leader_state.start()
+			else:
+				server.request_votes.remove(_sender)
+				if _sender in server.peers:
+					server.newVotes += 1
+				majority = len(server.new)/2 + 1
+				if server.newVotes >= majority:
+					print 'Get majority from new, become leader at Term %d' % server.currentTerm
+					if server.election.is_alive():
+						server.election.kill()
+					server.role = 'leader'
+					server.follower_state.kill()
+					server.leader_state = KThread(target = server.leader, args = ())
+					server.leader_state.start()					
+
 
 		else:
 			if _term > server.currentTerm: # discover higher term
@@ -163,6 +266,20 @@ def acceptor(server, data, addr):
 				success = 'True'
 				if len(entries) != 0:
 					server.log = server.log[:prevLogIndex] + entries
+					if entries[0].type == 1:
+						server.during_change = 1
+						server.new = entries[0].command.new_config
+						server.old = server.peers[:]
+						server.old.append(server.id)
+						server.peers = list(set(server.old + server.new))
+						server.peers.remove(server.id)			
+					elif entries[0].type == 2:
+						server.during_change = 2
+						server.new = Msg.new_config
+						server.peers = server.new
+						server.peers.remove(server.id)	
+
+
 					server.save()
 					matchIndex = len(server.log)
 				server.leaderID = _sender
@@ -175,8 +292,10 @@ def acceptor(server, data, addr):
 			if server.commitIndex > lastApplied:
 				server.poolsize = server.initial_state
 				for idx in range(1, server.commitIndex + 1):
-					server.poolsize -= server.log[idx - 1].command
-
+					if server.log[idx-1].type == 0:
+						server.poolsize -= server.log[idx - 1].command
+					elif server.log[idx-1].type == 2:
+						server.during_change = 0
 
 		reply_msg = AppendEntriesResponseMsg(server.id, _sender, server.currentTerm, success, matchIndex)
 		s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -202,15 +321,77 @@ def acceptor(server, data, addr):
 			if server.commitIndex < max(server.matchIndex.values()):
 				start = server.commitIndex + 1
 				for N in range(start,max(server.matchIndex.values()) + 1):
-					compare = [item >= N for item in server.matchIndex.values()]
-					if sum(compare) + 1 == server.majority and server.log[N-1].term == server.currentTerm:
-						for idx in range(server.commitIndex + 1, N + 1):
-							server.poolsize -= server.log[idx-1].command
+					if server.during_change == 0:
+						# not in config change
+						compare = 1
+						for key, item in server.matchIndex.items():
+							if key in server.peers and item >= N:
+								compare += 1
+						majority = (len(server.peers) + 1)/2 + 1
+						if compare == server.majority and server.log[N-1].term == server.currentTerm:
+							for idx in range(server.commitIndex + 1, N + 1):
+								server.poolsize -= server.log[idx-1].command
+								server.save()
+								s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+								s.sendto('Your request is fullfilled',server.log[idx-1].addr)
+								s.close()
+								print 'reply once'
+							server.commitIndex = N
+					elif server.during_change == 1:
+						majority_1 = len(server.old)/2 + 1
+						majority_2 = len(server.new)/2 + 1
+						votes_1 = 0
+						votes_2 = 0
+						if server.id in server.old:
+							votes_1 = 1
+						if server.id in server.new:
+							votes_2 = 1
+						for key, item in server.matchIndex.items():
+							if item >= N:
+								if key in server.old:
+									votes_1 += 1
+								if key in server.new:
+									votes_2 += 1
+						if votes_1 >= majority_1 and votes_2 >= majority_2 and server.log[N-1].term == server.currentTerm:
+							server.commitIndex = N
+							poolsize = server.initial_state
+							for idx in range(1, N + 1):
+								if server.log[idx-1].type == 0:
+									poolsize -= server.log[idx-1].command
+							server.poolsize = poolsize
 							server.save()
 							s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 							s.sendto('Your request is fullfilled',server.log[idx-1].addr)
 							s.close()
-						server.commitIndex = N
+							print 'send old_new once'
+											
+					else:
+						majority = len(server.new)/2 + 1
+						votes = 0
+						if server.id in server.new:
+							votes = 1
+						for key, item in server.matchIndex.items():
+							if item >= N:
+								if key in server.new:
+									votes += 1
+						if votes == majority and server.log[N-1].term == server.currentTerm:
+							print '----------here 2----------'
+							for idx in range(server.commitIndex + 1, N + 1):
+								if server.log[idx-1].type == 0:
+									server.poolsize -= server.log[idx-1].command
+								else:
+									if server.log[idx-1].type == 2:
+										if not server.id in server.new:
+											print 'something'
+											server.step_down()
+										server.during_change = 0
+								server.save()
+								s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+								s.sendto('Your request is fullfilled',server.log[idx-1].addr)
+								s.close()
+								print 'send new once'
+
+							server.commitIndex = N				
 
 
 

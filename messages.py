@@ -49,11 +49,12 @@ class AppendEntriesResponseMsg(BaseMessage):
 
 class LogEntry(object):
 
-    def __init__(self, term, command, addr, uuid):
+    def __init__(self, term, command, addr, uuid, _type = 0):
         self.term = term
         self.command = command
         self.uuid = uuid
         self.addr = addr
+        self.type = _type
 
 class Request(object):
     """docstring for Request"""
@@ -70,10 +71,18 @@ class RequestRedirect(Request):
         self.type = 'redirect'
 
 class ServerConfig(object):
-    def __init__(self, poolsize, currentTerm, votedFor, log):
+    def __init__(self, poolsize, currentTerm, votedFor, log, peers):
         self.poolsize = poolsize
         self.currentTerm = currentTerm
         self.votedFor = votedFor
         self.log = log
+        self.peers = peers
+        # self.new_quorom = new_quorom
 
-        
+class ConfigChange(object):
+    def __init__(self, new_config, uuid, phase, addr=None):
+        self.new_config = new_config
+        self.uuid = uuid
+        self.addr = addr
+        self.phase = phase
+        self.type = 'change'

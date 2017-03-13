@@ -36,30 +36,31 @@ class Server(object):
 		# need to put it into file later on
 		self.load()
 
+
 		self.port = self.addressbook[self.id]
 
-		self.peers = self.addressbook.keys()
-		self.peers.remove(self.id)
-		self.majority = (len(self.peers) + 1)/2 + 1
-
-		self.nextIndex = {}
- 		self.matchIndex = {}
- 		for peer in self.peers:
- 			self.nextIndex[peer] = len(self.log) + 1
- 			self.matchIndex[peer] = 0
+		# self.nextIndex = {}
+ 	# 	self.matchIndex = {}
+ 	# 	for peer in self.peers:
+ 	# 		self.nextIndex[peer] = len(self.log) + 1
+ 	# 		self.matchIndex[peer] = 0
 
 		self.request_votes = self.peers[:]
 
 		self.numVotes = 0
+		self.oldVotes = 0
+		self.newVotes = 0
 
 		self.lastLogIndex = 0
 		self.lastLogTerm = 0
 
-
 		self.listener = KThread(target = self.listen, args= (acceptor,))
 		self.listener.start()
 
-
+		self.during_change = 0
+		self.newPeers = []
+		self.new = None
+		self.old = None
 
 	def listen(self, on_accept):
 		srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -84,6 +85,7 @@ class Server(object):
 			election_timeout = 5 * random.random() + 5
 			while time.time() - self.last_update <= election_timeout:
 				pass
+
 			if self.election.is_alive():
 				self.election.kill()
 			self.start_election()
@@ -91,11 +93,23 @@ class Server(object):
 	def start_election(self):
 		self.role = 'candidate'
 		self.election = KThread(target =self.thread_election,args = ())
-		self.currentTerm += 1
-		self.votedFor = self.id
-		self.save()
-		self.numVotes = 1
-		self.election.start()
+		if len(self.peers) != 0:
+			self.currentTerm += 1
+			self.votedFor = self.id
+			self.save()
+			self.numVotes = 1
+			if self.during_change == 1:
+				self.newVotes = 0
+				self.oldVotes = 0
+				if self.id in self.new:
+					self.newVotes = 1
+				if self.id in self.old:
+					self.oldVotes = 1
+			elif self.during_change == 2:
+				self.newVotes = 0
+				if self.id in self.new:
+					self.newVotes = 1
+			self.election.start()
 
 	def thread_election(self):
 		print 'timouts, start a new election with term %d' % self.currentTerm
@@ -112,16 +126,29 @@ class Server(object):
 	 				data = pickle.dumps(msg)
 	 				sock = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
 	 				sock.sendto(data, ("", self.addressbook[peer]))
- 			time.sleep(2) # wait for servers to receive
+ 			time.sleep(1) # wait for servers to receive
 
  	def leader(self):
  		print 'Running as a leader'
  		self.role = 'leader'
+ 		self.nextIndex = {}
+ 		self.matchIndex = {}
+ 		for peer in self.peers:
+ 			self.nextIndex[peer] = len(self.log) + 1
+ 			self.matchIndex[peer] = 0
 		self.append_entries()
 
 	def append_entries(self):
+
+		receipts = self.peers[:]
 		while 1:
-			for peer in self.peers:
+			if self.during_change != 0:
+				receipts = self.peers[:]
+				for peer in receipts:
+					if peer not in self.nextIndex:
+						self.nextIndex[peer] = len(self.log) + 1
+						self.matchIndex[peer] = 0
+			for peer in receipts:
 				if len(self.log) >= self.nextIndex[peer]:
 					prevLogIndex = self.nextIndex[peer] - 1
 					if prevLogIndex != 0:
@@ -141,7 +168,7 @@ class Server(object):
 				data = pickle.dumps(Msg)
 				sock = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
 				sock.sendto(data, ("", self.addressbook[peer]))
-			time.sleep(1)
+			time.sleep(0.5)
 
 	def step_down(self):
 		if self.role == 'candidate':
@@ -155,19 +182,30 @@ class Server(object):
 			self.follower_state.start()
 
 	def load(self):
+		initial_running = [1,2,3]
+		# new_quorom = []
+
 		try:
 			with open(self.config_file) as f:
 				serverConfig = pickle.load(f)
 		except Exception as e:
-			serverConfig = ServerConfig(100, 0, -1, [])
+			if self.id not in initial_running:
+				serverConfig = ServerConfig(100, 0, -1, [], [])
+			else:
+				initial_running.remove(self.id)
+				serverConfig = ServerConfig(100, 0, -1, [], initial_running)
 
 		self.poolsize = serverConfig.poolsize
 		self.currentTerm = serverConfig.currentTerm
 		self.votedFor = serverConfig.votedFor
 		self.log = serverConfig.log
+		self.peers = serverConfig.peers
+		self.majority = (len(self.peers) + 1)/2 + 1
+		# self.new_quorom = new_quorom
+		#self.majority_1 = (len(self.new_quorom) + 1)/2 + 1
 
 	def save(self):
-		serverConfig = ServerConfig(self.poolsize, self.currentTerm, self.votedFor, self.log)
+		serverConfig = ServerConfig(self.poolsize, self.currentTerm, self.votedFor, self.log, self.peers)
 		with open(self.config_file, 'w') as f:
 			pickle.dump(serverConfig, f)
 

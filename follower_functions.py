@@ -36,9 +36,10 @@ def acceptor(server, data, addr):
 			newEntry = LogEntry(server.currentTerm, Msg, addr, Msg.uuid, 2)
 			server.log.append(newEntry)
 			server.peers = server.new[:]
-			server.peers.remove(server.id)		
+			if server.id in server.peers:
+				server.peers.remove(server.id)		
 			server.save()
-			print 'Config change phase 2 applied'
+			print 'Config change phase 2 applied, running peers'
 			#return
 
 		# if server.role == 'leader':
@@ -144,6 +145,8 @@ def acceptor(server, data, addr):
 	
 
 	if _type == 1: # requestvote message
+		if _sender not in server.peers:
+			return
 		_msg = Msg.data
 		print '---------Get requestvote message---------'
 		_msg = _msg.split()
@@ -254,10 +257,23 @@ def acceptor(server, data, addr):
 					if server.log[prevLogIndex - 1].term == prevLogTerm:
 						success = 'True'
 						server.leaderID = _sender
-						server.log = server.log[:prevLogIndex] + entries
 						if len(entries) != 0:
+							server.log = server.log[:prevLogIndex] + entries
 							matchIndex = len(server.log)
-						server.save()
+							if entries[0].type == 1:
+								server.during_change = 1
+								server.new = entries[0].command.new_config[:]
+								server.old = server.peers[:]
+								server.old.append(server.id)
+								server.peers = list(set(server.old + server.new))
+								server.peers.remove(server.id)			
+							elif entries[0].type == 2:
+								server.during_change = 2
+								server.new = entries[0].command.new_config[:]
+								server.peers = server.new[:]
+								server.peers.remove(server.id)	
+								print 'follower applied new config, running peers', server.peers
+								server.save()
 					else:
 						success = 'False'
 				else:
@@ -268,17 +284,17 @@ def acceptor(server, data, addr):
 					server.log = server.log[:prevLogIndex] + entries
 					if entries[0].type == 1:
 						server.during_change = 1
-						server.new = entries[0].command.new_config
+						server.new = entries[0].command.new_config[:]
 						server.old = server.peers[:]
 						server.old.append(server.id)
 						server.peers = list(set(server.old + server.new))
 						server.peers.remove(server.id)			
 					elif entries[0].type == 2:
 						server.during_change = 2
-						server.new = Msg.new_config
-						server.peers = server.new
+						server.new = entries[0].command.new_config[:]
+						server.peers = server.new[:]
 						server.peers.remove(server.id)	
-
+						print 'follower applied new config, running peers', server.peers
 
 					server.save()
 					matchIndex = len(server.log)
@@ -363,7 +379,7 @@ def acceptor(server, data, addr):
 							s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 							s.sendto('Your request is fullfilled',server.log[idx-1].addr)
 							s.close()
-							print 'send old_new once'
+							# print 'send old_new once'
 											
 					else:
 						majority = len(server.new)/2 + 1
@@ -379,19 +395,23 @@ def acceptor(server, data, addr):
 							for idx in range(server.commitIndex + 1, N + 1):
 								if server.log[idx-1].type == 0:
 									server.poolsize -= server.log[idx-1].command
-								else:
-									if server.log[idx-1].type == 2:
-										if not server.id in server.new:
-											print 'something'
-											server.step_down()
-										server.during_change = 0
-								server.save()
-								s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-								s.sendto('Your request is fullfilled',server.log[idx-1].addr)
-								s.close()
-								print 'send new once'
-
-							server.commitIndex = N				
+									server.save()
+									s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+									s.sendto('Your request is fullfilled',server.log[idx-1].addr)
+									s.close()
+									server.commitIndex = idx
+								elif server.log[idx-1].type == 2:
+									server.commitIndex = idx
+									time.sleep(1)
+									if not server.id in server.new:
+										print 'I am not in the new configuration'
+										server.step_down()
+									server.during_change = 0
+									server.save()
+									s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+									s.sendto('Your request is fullfilled',server.log[idx-1].addr)
+									s.close()
+								# print 'send new once'
 
 
 

@@ -118,7 +118,7 @@ class Server(object):
 		sender = self.id
 
 		while 1:
-			print 'Send vote request to ', self.request_votes
+			# print 'Send vote request to ', self.request_votes
 			for peer in self.peers:
 	 			if peer in self.request_votes:
 	 				Msg = str(self.lastLogTerm) + ' ' + str(self.lastLogIndex)
@@ -142,8 +142,8 @@ class Server(object):
 
 		receipts = self.peers[:]
 		while 1:
+			receipts = self.peers[:]
 			if self.during_change != 0:
-				receipts = self.peers[:]
 				for peer in receipts:
 					if peer not in self.nextIndex:
 						self.nextIndex[peer] = len(self.log) + 1
